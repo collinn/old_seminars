@@ -1,0 +1,30 @@
+\frametitle{West Gene Dataset}
+{
+\begin{lstlisting}
+## Create vector for ER status for each sample (1 = ER+, 0 = ER-)
+er <- clinical$ER
+table(er)
+er
+ 0  1
+24 25
+
+## Perform two-sample t-tests for each gene and save all p-values
+pval <- NULL
+stat <- NULL
+m <- nrow(chip.norm)
+for(i in 1:m) {
+   result <- t.test(chip.norm[i,] ~ er)
+   pval <- c(pval, result$p.value)
+   est <- result$estimate
+   stat <- c(stat, est[2] - est[1])
+}
+
+## Number of p-values significant at the 5% level
+> sum(pval < 0.05)
+[1] 1325
+
+## Bonferroni adjustment
+> sum(pval < 0.05 / length(pval))
+[1] 26
+\end{lstlisting}
+}

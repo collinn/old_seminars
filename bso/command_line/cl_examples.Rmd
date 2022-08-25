@@ -1,0 +1,789 @@
+---
+title: "Command Line Arguments to R"
+# author: "Collin Nolte"
+date:  "Last Updated: `r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{css, echo = FALSE}
+.terminal_class {
+  background-color: #373b41;
+  color:#FFFFFF;
+  border-radius: 20;
+}
+```
+
+
+
+```{r cars, class.source="terminal_class"}
+summary(cars)
+#282a2e
+```
+
+# Brief Introduction{#hpc_resources}
+
+  <!-- This document is not intended to be an introduction to parallel computing, but rather a construction of a mental template of the process in R, illustrated with toy examples. In particular, the focus of this document is to demonstrate passing commands and arguments to R from the command line, the primary method for submitting jobs to the HPC. While there is some description of the process of submitting a job on the HPC, users without prior experience should begin with the the following resources: -->
+  
+  Am I able to use <del> html here </del>?
+  
+  <p id="1stpar"> This is a paragraph </p>
+  
+  This document is not intended to be an introduction to parallel computing or to identify when particular problems suite themselves well to parallelization. Rather, the focus of this document is to demonstrate passing commands and arguments to R from the command line, though in the context of parallel computing where some of these processes may be most immediately employed. While there is some description of the process of submitting a job on the HPC, users without prior experience should begin with the the following resources:
+  
+- [Apply for HPC account](https://hpc.uiowa.edu/user-services/apply-account)
+  
+- [UI Biostat HPC Tutorial](https://iowabiostat.github.io/hpc/index.html)
+
+- [UI HPC Documentation](https://wiki.uiowa.edu/display/hpcdocs/Cluster+Systems+Documentation) 
+
+<!-- - <a href="https://wikipedia.org">Wikipedia?</a> -->
+
+<!-- Now, with regards to computing tasks in parallel, there are typically two overall methods worth consideration, which we will denote as being either *distributed* or *array* jobs. -->
+
+
+
+## About this document
+
+Generally speaking, we will be using command line arguments with an R file that has already been written and is saved in your working directory. The goal here is to illustrate how we might use these files and associated command line arguments in a self-contained way, without the need for downloading supplementary documents We accomplish this in the following way:
+
+- Create R "file" as a character vector to be written to a file in the working directory with `cat`
+
+- Execute CL command from R with the `system` function
+
+- Read in generated output with the `read_thingy` function provided below
+
+Here is a brief illustration of the process
+
+```{r, include = TRUE}
+## Function used within this document to read generated output
+read_thingy <- function(x) {
+  ss <- scan(x, what = "character", sep = "\n",
+     allowEscapes = FALSE, blank.lines.skip = FALSE,
+     quote = "'\"")
+  for(s in ss) {
+    cat(s, "\n")
+  }
+}
+
+## Files in our current directory
+list.files(".")
+
+## Create R file as string
+srcr <- "
+a <- 2
+b <- 2
+a + b
+"
+
+## Write out R file using cat
+cat(srcr, file = "example.R")
+
+## List files again, notice we now have 'example.R'
+list.files(".")
+
+## Run 'example.R' with system function
+cmd <- 'R CMD BATCH --vanilla example.R'
+system(cmd)
+
+## See that we generated output with .Rout file
+list.files(".")
+
+## Examine contents of output file
+read_thingy("example.Rout")
+
+```
+
+```{r, include = FALSE}
+file.remove(c("example.R", "example.Rout"))
+```
+
+Lastly, all of the system commands used in this document assume a Linux/Unix environment (such as the HPC or OS X). The use of `mclapply` makes this same assumption; users on Windows machines should use `parLapply` instead.
+
+## About the Command Line
+
+In the broadest sense, the [command line](https://en.wikipedia.org/wiki/Command-line_interface) refers to the (interactive) process or environment in which lines of text are interpreted for a computer program or operating system. For example, within RStudio, statements can be typed directly into the Console to be interpreted by R, with any relevant changes being reflected in the Environment window. For the purposes of this document, the command line will refer to the set of commands typed into a a Bash [shell](https://en.wikipedia.org/wiki/Shell_(computing)), with the purpose of issuing commands to the operating system (run this, move that, delete these, etc.). It is in this contet that we will be creating and executing files, as well as submitting jobs to the HPC.
+
+Generally speaking, our statements are going to consist of three components
+
+- The [command](https://en.wikipedia.org/wiki/Command_(computing)). This will be the specific function detailing the action we wish to perform. This includes changing directories, deleting/moving files, executing R scripts, and submitting jobs to the HPC queue
+
+- [Arguments](https://en.wikipedia.org/wiki/Command-line_interface#Arguments). These are parameters of the command and generally specify the object of the action. For example, `rm somefile.R` is the command to remove the argument `somefile.R`. Arguments can be associated with either commands, flags, or other arguments, and are generally parsed in the way that makes sense (? Better way to say this ?). That is to say, arguments are usually associated with preceding functions (or arguments), and that scope typically ends once a new argument requiring further arguments begins. For example, `Rscript somefile.R r_arg` will call the process `Rscript` with the argument being `somefile.R`. `somefile.R`, being an R file requiring additional arguments, will subsequently take `r_arg` as an argument.
+
+- [Flags and options](https://en.wikipedia.org/wiki/Command-line_interface#Option_conventions_in_Unix-like_systems). These are use to alter the default behavior of a command, or otherwise further specify a behavior. Generally, leading with two dashes indicates a boolean switch (do this or don't do this), while leading with a single dash can often take an additional argument. For example, `Rscript --no-save somefile.R` indicates that we do not want to save our R session on exit. Alternatively, `qsub -q BIOSTAT somefile.R` utilizes the `qsub` command (used to submit jobs to the HPC) with the `-q` flag, indicating that we would like to specify which queue we want to use (in this case, `BIOSTAT`). As `-q` only takes a single argument, the subsequent argument `somefile.R` is then again associated with `qsub`.
+
+With any UNIX/Linux commands, you can receive the full documentation (along with arguments discussed here) by tying `> man command` into the terminal (where `>` will be used to indicate that we are working directly on the command line). 
+
+# Types of Parallelism
+
+With regards to computing tasks in parallel, let us now introduce two overall methods worth consideration, which should generalize to most tasks that one may encounter. We will denote these methods as being either *distributed* or *array* jobs. It is of note that most problems can be structured to work under either method, though it will often be the case that a problem more naturally conforms to one than the other.
+
+## Distributed Parallelism (1 job, many processors)
+Distributed parallelism is generally what we are thinking when we use functions from the `parallel` packge, namely `parLapply`, `mclapply`, and friends. This parallelization is largely abstracted away (in the most basic sense - there are times when extra attention is needed, such as when dealing with seeds or scheduling), and we need only dictate the number of cores we intend to use.
+
+```{r}
+library(parallel)
+
+## Determine number of cores available
+n_cores <- detectCores()
+
+x <- 1:100
+result <- mclapply(x, sqrt, mc.cores = n_cores)
+```
+
+Using something similar to above on the HPC allows us to write our script as a single, cohesive thought and then dump as many processors as we wish to solving the problem. This is particularly useful when solving problems with larger datasets, as it requires the data to only be read in once. 
+
+ That is to say, this form of parallelism occurs within a *single* [R process](https://en.wikipedia.org/wiki/Process_(computing)), where each of the deployed processors has access to the same pool of memory reserved by the single instance of R.
+
+ It is worth noting here that this kind of parallelism can be implemented on your own machine, without the need for HPC resources. On a related note, see [below](#share) on how to safely share your code with others.
+
+
+
+
+## Array Parallelism (Many jobs, 1 processor)
+Array jobs, on the other hand, are a response to a need to do many similar tasks, though without needing necessarily a large number of processors to do them quickly. Although it is no issue to run an array job with multiple processors for each task, we choose here to isolate and emphasize the process of interest, and will only assign one processor to each task 
+
+Typically, the case is that we have one R script to perform a task at the most general level (build a model), but we wish to implement with variations to the arguments or parameters. The key difference here is that parallelism is not happening at the R level (i.e., there is no need for the `parallel` package), but rather on the CPU, where independent jobs are able to run separately on their own processors. This method of independent job dispatch is what is afforded to use by the Sun Grid Engine (SGE), the job queuing suite on the HPC. 
+
+As the parallelism occurs at the CPU level, we will be working with several *independent* R processes. In contrast to the previous form of parallelism, each R process here has it's own pool of memory not shared by the remaining processes. It is the need to coordinate these processes outside of R through the command line that motivates this document.
+
+<!-- Array parallelism will be the remaining focus of this document. -->
+
+# Reading Command Line Arguments
+
+As array style jobs are not being handled at the R level (does this need a visualization?), we must go about organizing and constructing them one level up, that is, from the command line which will subsequntly make the appropriate calls to R
+
+Our method for implementing similar jobs with differing parameters or arguments is going to be through the passing of command line arguments, utilizing the `commandArgs()` function in R. Command line arguments are essential because 
+
+- We will be interacting with multiple independent processes in R, and need a way to orchestrate this outside of R
+
+- Flexibility of command lines allows for arbitrary number of arguments
+
+- They can be implemented in scipts, increasing reproducability and reducing user error
+
+- There is no RStudio on the HPC
+
+What follows here is an example of using the `commandArgs()` function and it's return values. Note that `commandArgs()` takes one argument, `trailingOnly = FALSE/TRUE`, with the default being `FALSE`, and the one we typically want being `TRUE`. Consider below the values returned by each:
+
+
+```{r}
+## Make test function taking commandArgs
+test_str <- '
+zz <- file("tmp.out", open = "wt")
+sink(zz)
+
+## Capture command line arguments (default is FALSE)
+val <- commandArgs(trailingOnly = FALSE)
+
+
+## Print output, captured by sink
+cat("Contents of val\n")
+print(val)
+
+cat("\nClass of val\n")
+print(class(val))
+
+cat("\n\nLength of val\n")
+length(val)
+
+sink()
+'
+
+## Write to R file
+cat(test_str, file = "test.R")
+
+
+## Run using R CMD BATCH with one argument
+cmd <- "R CMD BATCH --no-save '--args 1' test.R "
+system(cmd)
+
+## Read in and display contents of out file
+read_thingy("tmp.out")
+```
+
+```{r, include = FALSE}
+file.remove(c("tmp.out", "test.R"))
+```
+
+We see here that `commandArgs()` returns quite a bit, including the executable from which R was called, command line options passed to R (we see a number of defaults, including `--restore` and `--save`), and the arguments that we included with `--args`. Consider next the output captured when we set `trailingOnly = TRUE`, which only returns arguments *after* `--args`:
+
+```{r}
+test_str <- '
+zz <- file("tmp.out", open = "wt")
+sink(zz)
+
+## Capture command line arguments
+val <- commandArgs(trailingOnly = TRUE)
+
+## Print output, captured by sink
+cat("Contents of val\n")
+print(val)
+
+cat("\nClass of val\n")
+print(class(val))
+
+cat("\n\nLength of val\n")
+length(val)
+sink()
+'
+
+## Write to R file
+cat(test_str, file = "test.R")
+
+## Run using R CMD BATCH with one argument
+cmd <- "R CMD BATCH --no-save '--args 1' test.R "
+system(cmd)
+
+## Read in and display contents of out file
+read_thingy("tmp.out")
+```
+
+```{r, include = FALSE}
+file.remove(c("tmp.out", "test.R"))
+```
+
+Now we get the single argument value, returned as a character vector. 
+
+Let's go a step further and see what happens when we pass in three arguments (we omit the `trailingOnly = FALSE` case here)
+
+```{r}
+test_str <- '
+zz <- file("tmp.out", open = "wt")
+sink(zz)
+
+idx <- commandArgs(trailingOnly = TRUE)
+
+cat("Contents of idx\n")
+print(idx)
+cat("\nClass of idx\n")
+print(class(idx))
+
+cat("\nLength of idx\n")
+length(idx)
+cat("\n")
+
+sink()
+'
+
+## Write to R file
+cat(test_str, file = "test.R")
+
+## Running the same function again with 3 arguments
+cmd <- "R CMD BATCH --vanilla '--args cat dog sheep' test.R "
+system(cmd)
+
+read_thingy("tmp.out")
+```
+
+```{r, include = FALSE}
+file.remove(c("tmp.out", "test.R"))
+```
+
+From this, we can deduce
+
+- Value of `commandArgs` is character vector of length equal to number of arguments, separated by spaces
+
+- Arguments do not need to be numeric values (1, 2, etc)
+
+
+For the purpose of parallel computing on the HPC, we will focus on the case with a single numeric value, as this will be the most natural way to structure the problem.  In particular, array jobs submitted to the HPC are each assigned a sequence of task ID numbers which can subsequently be used as arguments for our script. 
+
+There are multiple ways to pass different arguments to R, and it may be the case that you find yourself needing more complicated arguments to match your problem description exactly. Many of these require a bit more familiarity with [Bash scripting](https://en.wikipedia.org/wiki/Bash_(Unix_shell)). There is [a great tutorial](https://ryanstutorials.net/bash-scripting-tutorial/) that is relatively simple to follow, and will allow you much greater control as the needs and complexities of your problems grow. We will show an example of using Bash to extend the power of our job setup in a [later section](#sge).
+
+We'll touch on this again briefly, but what's important for the next section is to note how we are using sequences of integer values to enumerate the variations of parameters we want to include in our script.
+
+<!-- Specifically, for array jobs submitted on the HPC, they are usually assigned as a sequence of IDs specified by the `-t` argument to `qsub`. We will look briefly at this at the end, but for now it's relevant to know that job IDs are usually given in the form `n-m:p` (index the jobs in the range `n-m`, with stepsize `p`). That is, each individual job will receive a single numeric value as it's argument (read into R as a character). -->
+
+## Grid of Arguments
+
+We know we can get a number from the command line if we want, but what we need now is a way to turn that into something useful. The punchline of the joke is effectively this: create some grid or array of values that we would like to use as arguments, and use the command line argument value to index it.
+
+To illustrate this, we will use an example from BIOS 7330, in which we want to select tuning parameters for use in a random forest. We will start by making a grid of parameter values, `param_grid`, and noting the number of rows (how many array jobs would we need). We will save this grid as an RDS file for later use. 
+
+```{r}
+## Parameters for tuning
+sampsizes <- c(50, 75, 100)
+nodesizes <- c(1, 5, 10, 25)
+param_grid <- as.matrix(expand.grid(sampsizes, nodesizes))
+
+param_grid
+nrow(param_grid)
+saveRDS(param_grid, "param.rds")
+```
+
+Ok, and here is the process by which we might consider getting the best fit. Let's build a training and testing set, and construct some loss function to compare.
+
+```{r, message = FALSE}
+library(randomForest)
+data(iris)
+
+set.seed(69)
+train.idx <- sample(1:nrow(iris), size = 120)
+test.idx <- setdiff(1:nrow(iris), train.idx)
+iris.train <- iris[train.idx,]
+iris.test <- iris[test.idx,]
+
+
+pred_loss <- function(param, n.itrs = 5) {
+  print(c(param))
+  trials <- sapply(1:n.itrs, function(x) {
+    
+    train.idx <- sample(1:nrow(iris), size = 120)
+    test.idx <- setdiff(1:nrow(iris), train.idx)
+    iris.train <- iris[train.idx, ]
+    iris.test <- iris[test.idx, ]
+  
+  
+    rf.out <- randomForest(Species ~ ., data = iris.train, ntree = 500,
+                         sampsize = param[1],
+                         nodesize = param[2])
+                         
+  
+    rf.pred <- predict(rf.out, iris.test)
+    1 - mean(iris.test$Species == rf.pred)
+  })
+  mean(trials)
+}
+
+```
+
+
+And here is the same process, but written out to an R file, similarly to what was done above. Note here, however, that we have added the `commandArgs()` function, in addition to casting it to a numeric value. 
+
+```{r}
+randForest <- '
+library(randomForest)
+data(iris)
+
+set.seed(69)
+train.idx <- sample(1:nrow(iris), size = 120)
+test.idx <- setdiff(1:nrow(iris), train.idx)
+iris.train <- iris[train.idx,]
+iris.test <- iris[test.idx,]
+
+params <- readRDS("param.rds")
+
+## Here is where we added commandArgs, then subset by row index
+idx <- as.numeric(commandArgs(TRUE))
+params <- params[idx, ]
+
+pred_loss <- function(param, n.itrs = 5) {
+  print(c(param))
+  trials <- sapply(1:n.itrs, function(x) {
+    
+    train.idx <- sample(1:nrow(iris), size = 120)
+    test.idx <- setdiff(1:nrow(iris), train.idx)
+    iris.train <- iris[train.idx, ]
+    iris.test <- iris[test.idx, ]
+  
+  
+    rf.out <- randomForest(Species ~ ., data = iris.train, ntree = 500,
+                         sampsize = param[1],
+                         nodesize = param[2])
+                         
+  
+    rf.pred <- predict(rf.out, iris.test)
+    1 - mean(iris.test$Species == rf.pred)
+  })
+  mean(trials)
+}
+
+val <- pred_loss(params)
+result <- list(param = params, pred_loss = val)
+
+## Save out file based on job name
+if(!dir.exists("results")) dir.create("results")
+saveRDS(result, paste0("results/result_", idx, ".rds"))
+'
+
+cat(randForest, file = "randomForest.R")
+```
+
+With the seeds set in place, we would anticipate that the values from running this interactively from R (as we are doing here) should match those called via the command line, as is saved and read back in through `res1` and `res2`. Fortunately, this ends up being the case.
+
+```{r}
+## Running in R session
+pred_loss(param_grid[1, ])
+pred_loss(param_grid[2, ])
+```
+
+We compare this to the output generated from running the CL commands
+
+```{r}
+## Passing in '1' as argument and calling function
+cmd <- "R CMD BATCH --vanilla '--args 1' randomForest.R "
+system(cmd)
+## Passing in '2' as argument and calling function
+cmd <- "R CMD BATCH --vanilla '--args 2' randomForest.R "
+system(cmd)
+
+## Read in results from previous commands
+res1 <- readRDS("results/result_1.rds")
+res2 <- readRDS("results/result_2.rds")
+
+## Results from R CMD BATCH
+res1
+res2
+
+```
+
+```{r, include = FALSE}
+file.remove(c("randomForest.R", "randomForest.Rout", "param.rds",
+              "results/result_1.rds", "results/result_21.rds", "results"))
+
+```
+
+# Moving to HPC
+
+Mentioned above, we are not going to go into HPC setup here, and the links [above](#hpc_resources) can be consulted to get started. What we will assume here is that
+
+- You have applied for and have an account on the HPC
+- Have the correct version of R loaded and prepared to be used
+- Have moved the relevant R file to the HPC to be submitted
+- You are on a login node (as opposed to a compute node)
+
+A note on the last point - the UI Biostat tutorial makes clear that computing intensive jobs are NOT to be run on the login nodes. As an alternative, a user should login to a compute node, along with requesting the type of environment they wish to use (parallel environment, number of processors requested, etc). This is typically done to allow for interactive jobs (running quick scripts to troubleshoot, or running jobs that run relatively quickly) However, here we will be interacting with the HPC from the login node, though scheduling our jobs to be run on specific computing nodes. This allows us to avoid logging in and taking up resources, and we can submit the job to be run for whatever period of time and come back when it's finished (as opposed to remaining logged in to a compute node).
+
+Access to the HPC is limited to a [shell](https://en.wikipedia.org/wiki/Shell_(computing)), and so each of our interactions will be through the use of arguments on the command line. There are endless ways to arrive at the same product, but our workflow here will be as follows
+
+1. Create R file to run code to be parallelized (see above)
+
+2. Create Bash script file (`job.sh`) to set up and run the R code. To run it, we must make it an executable. This is done with the command line command `chmod +x job.sh`
+
+3. Submit the script file to the HPC using the `qsub` command, with `qsub` arguments
+
+## Script File
+
+The first point has been covered in brief detail, so we move to the second. The script file is going to contain all of the command line arguments that will be needed to run our R file. While not strictly necessary, it will overwhelmingly simplify the process of calling an R script, with arguments, nested within the call to `qsub`, the CL function to submit a job to the HPC. It will look in large part similar to what was included in the `cmd` variable above, invoked by the `system` call, with a few extra components. Regardless of the tast at hand, the script file should contain the following:
+
+- A [shebang](https://en.wikipedia.org/wiki/Shebang_(Unix)) (`#!/bin/bash`), indicating to the computer how to interpret the script. Formally, the `#!` is the shebang, and `/bin/bash` is where the binary is for the executable to run it. Here, we are telling the computer that we want to run our script with Bash. If we had a text R file that we wanted to run from the command line without `R CMD BATCH`, we could include `#!/bin/R` as the shebang, indicating to the computer that we want to run the text file in R
+
+- A call to either `Rscript` or `R CMD BATCH`, along with the R file and additional arguments to the R language
+
+- Arguments to the R function, passed in as [Bash variables](https://ryanstutorials.net/bash-scripting-tutorial/bash-variables.php). This is going to be of the form `$varname` or `$[0-9]` (always with a dollar sign).
+
+A few more notes on script files in general. First, note that they are generally written in Bash. This is simply the scripting language used to organize and execute system commands. Once the script file has been written, we need to distinguish it as an [executable](https://en.wikipedia.org/wiki/Modes_(Unix)) file rather than a plain text file. This can be done with the command `chmod +x file.sh` where `chmod` is the function, `+x` indicates that we are adding executable permissions, and `file.sh` designates the receiving object of our command. 
+
+Once we make them executable, we can run their contents directly from the command line. We invoke this from the command line with `./`. For, for example, if we had `job.sh`, we would run this from the command line as `> ./job.sh`.  Once doing this, the computer will look at the shebang, determine the proper program to interpret the script, and then run it.
+
+In the following, we assume that each block of text is included in a file called `job.sh`, again unless preceeded by `>`, in which case it is assumed to be run from the command line. Here is an example script
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+R CMD BATCH --no-save --no-restore "--args 1" somefile.R
+```
+
+We see that it is a Bash script (from the shebang) that calls from R (`R CMD BATCH`) the file `somefile.R`. We see further that it takes the argument `1`. As we saw above, this will literally pass in `1` as a character into R to be interpretted by `commandArgs()`. To run this from the command line, we will simply type
+
+```{bash, eval = FALSE, class.source="terminal_class"}
+> ./job.sh
+```
+
+Now consider the following script:
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+R CMD BATCH --no-save --no-restore "--args $1" somefile.R
+```
+
+This will do the same as above, but now the argument to R has been replaced with `$1`. In Bash, recall that `$` indicates a variable name. Here, the `1` indicates that we want the first argument passed to the Bash script (this is true for any integer value to the the *n*th argument, $[n]). To get the same output as before, we would now type
+
+```{bash, eval = FALSE, class.source="terminal_class"}
+> ./job.sh 1
+```
+ The trailing `1` will be picked up as the first argument and passed to `somefile.R`. 
+ 
+What happens, then, if we have
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+R CMD BATCH --no-save --no-restore "--args $1 $2 $4" somefile.R
+```
+
+and type
+
+```{bash, eval = FALSE, class.source="terminal_class"}
+> ./job.sh 1 2 3 4
+```
+at the command line? What about
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+R CMD BATCH --no-save --no-restore "--args $somevar" somefile.R
+```
+
+```{r, eval = FALSE, class.source="terminal_class"}
+> export somevar="1"
+> ./job.sh
+```
+
+Notice how `somevar` was not passed directly to `job.sh` as an argument? This is because exporting a variable in Bash places it in the global environment, which can then be access by the script. Commonly used global bash variables include `$HOME`, for our home directory, `$PWD` for the present working directory, and `$PATH`, containing the set of directories in which the operating system will look for executables.
+
+In addition to being able to use variables from the global environment, a Bash process itself can have a locally defined variable that can be used anywhere in the script. We next demonstrate how we might take advantage of this once we have moved to the HPC.
+
+As we mentioned above, running an array job on the HPC assigns to each job a specific task ID. This task ID is created as a local variable name in Bash (`$SGE_TASK_ID`) by the `qsub` command, and so we do not have to pass it directly. For array type jobs on the HPC, our script may look like
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+R CMD BATCH --no-save --no-restore "--args $SGE_TASK_ID" somefile.R
+```
+
+Now, when we run `job.sh` on  multiple processors at once, each job will receive the relevant `$SGE_TASK_ID` passed to it to be used as an argument in our R file. Because this is being organized by the SGE, we don't have to worry ourselves about the specific arguments that go into each of the independent processes. 
+
+When running a distributed type job where there is no need to receive command line arguments, we can simply omit the `"--args $var"` from our script.
+
+
+
+## Submitting Script to HPC
+
+We've got the R file we want to run, and we've constructed the script that will handle the how's and what's of running it.
+
+
+We now need to submit this script to the HPC through the `qsub` command. This is covered in some detail in the Biostat HPC tutorial (along with `qlogin`, `qdel`, `qstat`, and other related functions for managing your session on the HPC), so here we will cover a few example submissions, depending on the type of job you might want. Recall from above that, as with any UNIX/Linux commands, you can receive the full documentation (along with arguments discussed here) by tying `> man qsub` into the terminal. 
+
+The `qsub` command is going to be responsible for dictating the following
+
+- Do I want a parallel environment, and if yes, how many cores do I want? Note here that "parallel environment" is in the sense of *distributed* parallel computing. If my processors need to communicate, this is what I need. If I am running 10,000 array jobs, each on a single processor, this can be omitted
+
+- Which [compute node](https://wiki.uiowa.edu/display/hpcdocs/Queues+and+Policies) do I want to submit my job to?
+
+- Is this an array job? If so, how should I index my jobs?
+
+- What is the actual script file I plan on submitting
+
+- Where (which directory) do I want this script to run?
+
+- Where should I put the output
+
+The full syntax with everything included may look like this:
+
+```{bash, eval = FALSE, class.source="terminal_class"}
+> qsub -V -cmd -pe smp numcores -e err -o out -q BIOSTAT -t n-m:p job.sh
+```
+
+That is, we are calling `qsub` with the following arguments
+
+- `-V` is a flag to indicate that we want to export all environment variables when submitting a job. Remember above when we called `export somevar = 1`? That becomes a global bash environment variable. If we want that variable available in our script, we want to include `-V`
+
+- `-cmd` indicates that we want to run the job in the directory from which we are calling it. Typically, we are sitting in the same directory as the job we want to run. Attempting to do so without this would result in an error, as the Sun Grid Engine (SGE) would be looking in (or writing out to) your home directory instead. If you have a script in which jobs are called with their relative paths, multiple jobs, or any other additional complexities to the work flow, you may want to omit this
+
+- `-pe smp numcores` says I want a parallel environment (see above) with some number of cores (`numcores` should be an integer value). See the compute node link above to see which nodes have which resources available to them. Calling a job with too many processors can leave your job in "pending" mode without explicitly failing (as far as I know, for forever)
+
+- `-e, -o` indicate where we want to write error and output files. Above, we pass the arguments `err, out` to `-e, -o` respectively, indicating that we want to write errors to the directory `err` and output to `out`. I often direct both to `/dev/null` because I don't make errors (or find them uninformative, which is often the case when running `R CMD BATCH`, which creates it's own `.Rout` file, independent of calls to `qsub`)
+
+- `-q BIOSTAT` says I want to submit this to the BIOSTAT node. There are numerous nodes available, with different restrictions or options available. The default is `-q UI`, available to everyone
+
+- `-t n-m:p` indicates that we want an array job. We can think of `-t` as the  argument indicating to `qsub` that we are running array tasks; the `n-m:p` is further an argument to complement `-t`. It indicates that I want my job IDs to be in the integer range `n` to `m`, with stepsize `p`.
+
+- `job.sh` is the name of the job we are running.
+
+With that in mind, here are some `qsub` calls you may be interested in running for your particular problem (omitting `-e, -o, -V, -cmd`)
+
+#### Distributed job (using `parLapply` or `mclapply`)
+
+```{bash, eval = FALSE, class.source="terminal_class"}
+> qsub -pe smp 56 -q BIOSTAT job.sh
+```
+
+#### Array job using `commandArgs`, one processor each
+
+```{bash, eval = FALSE, class.source="terminal_class"}
+> qsub  -q BIOSTAT -t 1-99 job.sh
+```
+
+
+#### Array job with 10 processors each, using only even indicies
+
+```{bash, eval = FALSE}
+> qsub -pe smp 10 -q BIOSTAT -t 2-100:2 job.sh
+```
+
+
+#### Distributed job passing in additional arguments to R
+```{bash, eval = FALSE}
+> qsub -pe smp 56 -q BIOSTAT job.sh three more args
+```
+
+# Extras
+
+### Sharing Code with Others {#share}
+
+It will often be the case that code that we write will not live for eternity in isolation on our own machines. It may be the case that we wish to use it on the HPC, share with collaborators, or revist again ourselves in the future. 
+
+With this in mind, we should strive to make our code as robust as possible, including making allowances for the specifics of any individual machine. We will cover how to do that safely here in the context of distributed parallelization, but note that this general outline should work in all cases in which we do not make assumptions about another user's machine. We first consider the functions `library` and `require`.
+
+#### Library vs Require
+
+In this particular case, the `parallel` package is included in base R, so it is reasonable to suspect that any user running your code would have the `parallel` package available. However, this is not the case with all packages, and there may be situations in which you would like to use a particular package for speed (or convenience), but do not want to force somebody to download it if they do not already have it (very thoughtful of you). This is where `library` and `require` come into play.
+
+First, we consider `library`. `library` will load a package if it is installed, and will throw an error if it is not. `library` invisibly returns a list of packages that have been attached to the current session
+
+```{r, error = TRUE}
+
+## Load package that I already have
+val1 <- library(data.table)
+
+## Returns attached packages
+(val1)
+
+## Load package that I do not have
+val2 <- library(fakepackage)
+
+## Never assigned because of error
+(val2)
+```
+
+On the other hand, `require` will load a package if it is available, and will return a boolean value as a result. If the package is not available, a warning is issued, but of course, these do not halt execution.
+
+```{r}
+## Load package I already have
+val1 <- require(data.table)
+
+## Boolean
+(val1)
+
+## Load package I do not have
+val2 <- require(fakepackage)
+
+## Boolean
+(val2)
+```
+
+
+Let's now consider a trivial example of how we can write our code in such a way that we do not enforce others to download packages they don't need. We determine first if they have a parallel package available and, if so, we utilize it
+
+```{r}
+x <- 1:100
+
+## Use parallel if it is available
+if(require(parallel)) {
+  n_cores <- detectCores() - 1 
+  result <- mclapply(x, sqrt, mc.cores = n_cores)
+} else {
+  result <- lapply(x, sqrt)
+}
+```
+
+
+#### Avoid Magic Numbers
+
+In general, we should do all that we can to avoid the use of [magic numbers](https://en.wikipedia.org/wiki/Magic_number_(programming)). In the example above, note that instead of assigning `n_cores <- 4`, we used `n_cores <- detectCores() - 1`. This accomplishes two things
+
+- By using `detectCores()`, we will not run into an issue if a user has less available cores on their machines than us, and we may be able to utilize more cores if the user has more available than our local machine
+
+- We subtract one from the value of `detectCores()` as a courtesy, so that the R session does not take up all of the available computing resources (which may be needed for browsers, other applications, etc.)
+
+#### Operating System Specific
+
+As mentioned at the beginning of this document, some functions are only available on specific platforms, such as `mclapply`, which is available on Unix-like systems (including OS X). I find it simpler to use, but would still like to make my code available for others as well without having to worry about making modifications later or helping them troubleshoot. 
+
+This is not limited to only the `parallel` package, as there are other functions and behaviors that may be different across operating systems (namely system commands and file handling). We conclude here with a method for making that determination and handling it appropriately (we omit `require(parallel)` here for simplicity)
+
+```{r}
+library(parallel)
+
+x <- 1:100
+
+## Only returns values "windows" or "unix"
+os <- .Platform$OS.type
+
+n_cores <- detectCores() - 1
+
+## Run parallel depending on OS
+if(os == "unix") {
+  result <- mclapply(x, sqrt, mc.cores = n_cores)
+} else if (os == "windows") {
+  cl <- makeCluster(n_cores)
+  clusterExport(cl, "x")
+  result <- parLapply(cl, x, sqrt)
+  stopCluster(cl)
+}
+
+```
+
+
+### Alternatives to `$SGE_TASK_ID` {#sge}
+For completeness and as an example using Bash, we consider an alternative for using a list of arbitrary length for variables to be passed to R. This can be particularly useful if we have a text file or csv with each line (or entry) representing something we wish to use as an argument. Note that in this example, the processes are not running in parallel, but rather in a loop. This makes it convenient for jobs on your local machine not needing the additional power of the HPC.
+
+Here, we construct a text file `fav_animals.txt` which contains 5 lines, but with each line containing a different number of fields (separated by spaces). Our goal here is to use each line as an argument for an independent R process (though not in parallel here, as we are doing it locally)
+
+
+```{r, include = FALSE}
+if(file.exists("result.txt")) file.remove("result.txt")
+```
+
+```{r}
+## Create text file with 5 lines for arguments
+animals <- c("Vixie", "dog", "multiple dogs", "kittens", "cats, I guess")
+cat(animals, file = "fav_animals.txt", sep = "\n")
+
+
+## Create R script to receive input, append output to result.txt
+rscr <- "
+val <- commandArgs(TRUE)
+answer <- paste0('My favorite animal is ', paste0(val, collapse = ' '), '\\n')
+print(answer)
+
+## Append answers to text file called result
+cat(answer, file = 'result.txt', append = TRUE)
+"
+cat(rscr, file = "animals.R")
+```
+
+We now create a Bash script that will loop through the lines of the designated text file and use each as an argument in turn.
+
+```{r}
+## Create a bash script file that loops through lines
+## and passes them in as arguments in R
+bash <- '
+#!/bin/bash
+
+# loop through fav_animals with variable $line
+while read line
+do
+ R CMD BATCH --no-save --no-restore "--args $line" animals.R
+done < "fav_animals.txt"
+'
+
+## Create bash script and make executable
+cat(bash, file = "job.sh")
+system("chmod +x job.sh")
+
+## Run script
+system("./job.sh")
+
+## Read results
+read_thingy("result.txt")
+```
+
+```{r, include = FALSE} 
+file.remove(c("result.txt", "fav_animals.txt", "job.sh", "test.Rout", 
+              "example.Rout", "animals.R", "animals.Rout", "example.Rout"))
+system("rm -rf results/")
+```
+
+
+<p> we can also <a href="cl_examples.html#1stpar">link</a> to the paragraph above </p>
+
+
+
+
+
+
+
+
+
+
+
+
